@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NHL Yesterday</title>
+  <style>
+    :root {
+      --bg: #f4f5f7;
+      --card: #ffffff;
+      --text: #1b1f24;
+      --muted: #69707a;
+      --border: #e1e4e8;
+      --accent: #0b5cad;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111418;
+        --card: #1b2026;
+        --text: #e8eaed;
+        --muted: #9aa1aa;
+        --border: #2c333b;
+        --accent: #6aa8ec;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.4;
+    }
+    main { max-width: 640px; margin: 0 auto; padding: 32px 16px 48px; }
+    h1 { font-size: 1.6rem; margin: 0 0 4px; }
+    .sub { color: var(--muted); margin: 0 0 20px; }
+    .controls { display: flex; gap: 8px; align-items: center; margin-bottom: 20px; }
+    .controls button, .controls input {
+      font: inherit;
+      color: var(--text);
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 10px;
+    }
+    .controls button { cursor: pointer; }
+    .controls button:hover { border-color: var(--accent); }
+    ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+    li {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 12px;
+    }
+    .team { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .team.home { justify-content: flex-end; text-align: right; }
+    .team img { width: 36px; height: 36px; flex: none; }
+    .team span { font-weight: 600; overflow-wrap: anywhere; }
+    .at { color: var(--muted); font-size: 0.9rem; }
+    .venue {
+      grid-column: 1 / -1;
+      color: var(--muted);
+      font-size: 0.85rem;
+      text-align: center;
+      margin-top: -4px;
+    }
+    .status { color: var(--muted); padding: 16px 0; }
+    @media (max-width: 420px) {
+      .team img { width: 28px; height: 28px; }
+      .team .full { display: none; }
+    }
+    @media (min-width: 421px) {
+      .team .abbr { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>NHL games played</h1>
+    <p class="sub">Spoiler-free: matchups only, never scores.</p>
+
+    <div class="controls">
+      <button id="prev" aria-label="Previous day">&larr;</button>
+      <input type="date" id="date" aria-label="Date">
+      <button id="next" aria-label="Next day">&rarr;</button>
+      <button id="yesterday">Yesterday</button>
+    </div>
+
+    <div id="status" class="status">Loading…</div>
+    <ul id="games"></ul>
+  </main>
+
+  <script>
+    // Data source: ESPN's public scoreboard endpoint (CORS-enabled).
+    // Only team names, logos and venue are ever read from the response;
+    // score, winner and result-detail fields are deliberately ignored.
+    const API = "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/scoreboard?dates=";
+
+    const dateInput = document.getElementById("date");
+    const statusEl = document.getElementById("status");
+    const listEl = document.getElementById("games");
+
+    function toISO(d) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    }
+
+    function yesterday() {
+      const d = new Date();
+      d.setDate(d.getDate() - 1);
+      return toISO(d);
+    }
+
+    function shiftDate(days) {
+      const [y, m, d] = dateInput.value.split("-").map(Number);
+      const dt = new Date(y, m - 1, d + days);
+      dateInput.value = toISO(dt);
+      load();
+    }
+
+    function teamEl(competitor, side) {
+      const t = competitor.team || {};
+      const div = document.createElement("div");
+      div.className = `team ${side}`;
+
+      const img = document.createElement("img");
+      img.src = t.logo || "";
+      img.alt = "";
+      img.loading = "lazy";
+
+      const full = document.createElement("span");
+      full.className = "full";
+      full.textContent = t.displayName || t.name || "TBD";
+
+      const abbr = document.createElement("span");
+      abbr.className = "abbr";
+      abbr.textContent = t.abbreviation || full.textContent;
+
+      if (side === "home") div.append(full, abbr, img);
+      else div.append(img, full, abbr);
+      return div;
+    }
+
+    function render(events) {
+      listEl.innerHTML = "";
+      // A game counts as "played" once it has finished (state "post").
+      // Postponed/cancelled games are excluded.
+      const played = events.filter(e => {
+        const type = e.status && e.status.type;
+        return type && type.state === "post" && type.completed;
+      });
+
+      const label = new Date(dateInput.value + "T12:00:00").toLocaleDateString(undefined, {
+        weekday: "long", month: "long", day: "numeric", year: "numeric"
+      });
+
+      if (played.length === 0) {
+        statusEl.textContent = `No NHL games were played on ${label}.`;
+        return;
+      }
+      statusEl.textContent = `${played.length} game${played.length === 1 ? "" : "s"} played on ${label}`;
+
+      for (const e of played) {
+        const comp = (e.competitions || [])[0] || {};
+        const cs = comp.competitors || [];
+        const away = cs.find(c => c.homeAway === "away") || cs[0];
+        const home = cs.find(c => c.homeAway === "home") || cs[1];
+        if (!away || !home) continue;
+
+        const li = document.createElement("li");
+        const at = document.createElement("div");
+        at.className = "at";
+        at.textContent = "@";
+        li.append(teamEl(away, "away"), at, teamEl(home, "home"));
+
+        if (comp.venue && comp.venue.fullName) {
+          const v = document.createElement("div");
+          v.className = "venue";
+          v.textContent = comp.venue.fullName;
+          li.append(v);
+        }
+        listEl.append(li);
+      }
+    }
+
+    async function load() {
+      const value = dateInput.value;
+      statusEl.textContent = "Loading…";
+      listEl.innerHTML = "";
+      try {
+        const res = await fetch(API + value.replaceAll("-", ""));
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (dateInput.value !== value) return; // a newer request superseded this one
+        render(data.events || []);
+      } catch (err) {
+        statusEl.textContent = `Couldn't load games (${err.message}). Try again later.`;
+      }
+    }
+
+    document.getElementById("prev").addEventListener("click", () => shiftDate(-1));
+    document.getElementById("next").addEventListener("click", () => shiftDate(1));
+    document.getElementById("yesterday").addEventListener("click", () => {
+      dateInput.value = yesterday();
+      load();
+    });
+    dateInput.addEventListener("change", load);
+
+    dateInput.value = yesterday();
+    dateInput.max = toISO(new Date());
+    load();
+  </script>
+</body>
+</html>
