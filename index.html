@@ -89,6 +89,13 @@
       margin-top: -4px;
     }
     .status { color: var(--muted); padding: 16px 0; }
+    h2 { font-size: 1.25rem; margin: 36px 0 4px; }
+    h3 {
+      font-size: 0.95rem;
+      color: var(--muted);
+      font-weight: 600;
+      margin: 20px 0 10px;
+    }
     @media (max-width: 420px) {
       .team img { width: 28px; height: 28px; }
       .team .full { display: none; }
@@ -100,7 +107,7 @@
 </head>
 <body>
   <main>
-    <h1>NHL games played</h1>
+    <h1>NHL games</h1>
     <p class="sub">Spoiler-free: matchups only, never scores.</p>
 
     <div class="controls">
@@ -112,6 +119,10 @@
 
     <div id="status" class="status">Loading…</div>
     <ul id="games"></ul>
+
+    <h2>Coming up</h2>
+    <div id="upcoming-status" class="status">Loading…</div>
+    <div id="upcoming"></div>
   </main>
 
   <script>
@@ -123,6 +134,9 @@
     const dateInput = document.getElementById("date");
     const statusEl = document.getElementById("status");
     const listEl = document.getElementById("games");
+    const upStatusEl = document.getElementById("upcoming-status");
+    const upEl = document.getElementById("upcoming");
+    const UPCOMING_DAYS = 7;
 
     function toISO(d) {
       const y = d.getFullYear();
@@ -189,25 +203,103 @@
       statusEl.textContent = `${played.length} game${played.length === 1 ? "" : "s"} played on ${label}`;
 
       for (const e of played) {
-        const comp = (e.competitions || [])[0] || {};
-        const cs = comp.competitors || [];
-        const away = cs.find(c => c.homeAway === "away") || cs[0];
-        const home = cs.find(c => c.homeAway === "home") || cs[1];
-        if (!away || !home) continue;
+        const li = gameEl(e);
+        if (li) listEl.append(li);
+      }
+    }
 
-        const li = document.createElement("li");
-        const at = document.createElement("div");
-        at.className = "at";
-        at.textContent = "@";
-        li.append(teamEl(away, "away"), at, teamEl(home, "home"));
+    // One matchup card. `note` is optional extra text (e.g. start time);
+    // it is never derived from score or result fields.
+    function gameEl(e, note) {
+      const comp = (e.competitions || [])[0] || {};
+      const cs = comp.competitors || [];
+      const away = cs.find(c => c.homeAway === "away") || cs[0];
+      const home = cs.find(c => c.homeAway === "home") || cs[1];
+      if (!away || !home) return null;
 
-        if (comp.venue && comp.venue.fullName) {
-          const v = document.createElement("div");
-          v.className = "venue";
-          v.textContent = comp.venue.fullName;
-          li.append(v);
+      const li = document.createElement("li");
+      const at = document.createElement("div");
+      at.className = "at";
+      at.textContent = "@";
+      li.append(teamEl(away, "away"), at, teamEl(home, "home"));
+
+      const details = [note, comp.venue && comp.venue.fullName].filter(Boolean);
+      if (details.length) {
+        const v = document.createElement("div");
+        v.className = "venue";
+        v.textContent = details.join(" · ");
+        li.append(v);
+      }
+      return li;
+    }
+
+    function dayLabel(d) {
+      return d.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+    }
+
+    // Games from today through the next UPCOMING_DAYS days, grouped by the
+    // viewer's local day, showing only the start time. Games that are live
+    // or already over today are still listed by start time only, so no
+    // result ever shows.
+    function renderUpcoming(events) {
+      upEl.innerHTML = "";
+      const today = toISO(new Date());
+      const last = new Date();
+      last.setDate(last.getDate() + UPCOMING_DAYS - 1);
+      const lastISO = toISO(last);
+
+      const groups = new Map();
+      const sorted = events
+        .filter(e => e.date)
+        .sort((a, b) => new Date(a.date) - new Date(b.date));
+      for (const e of sorted) {
+        const start = new Date(e.date);
+        const key = toISO(start);
+        if (key < today || key > lastISO) continue;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(e);
+      }
+
+      if (groups.size === 0) {
+        upStatusEl.textContent = `No NHL games scheduled in the next ${UPCOMING_DAYS} days.`;
+        return;
+      }
+      upStatusEl.textContent = "";
+      upStatusEl.hidden = true;
+
+      for (const [key, games] of groups) {
+        const h = document.createElement("h3");
+        const [y, m, d] = key.split("-").map(Number);
+        h.textContent = key === today ? `Today, ${dayLabel(new Date(y, m - 1, d))}` : dayLabel(new Date(y, m - 1, d));
+        const ul = document.createElement("ul");
+        for (const e of games) {
+          const type = (e.status && e.status.type) || {};
+          const note = type.name === "STATUS_POSTPONED" ? "Postponed"
+            : type.name === "STATUS_CANCELED" ? "Cancelled"
+            : new Date(e.date).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+          const li = gameEl(e, note);
+          if (li) ul.append(li);
         }
-        listEl.append(li);
+        upEl.append(h, ul);
+      }
+    }
+
+    async function loadUpcoming() {
+      upStatusEl.hidden = false;
+      upStatusEl.textContent = "Loading…";
+      upEl.innerHTML = "";
+      // ESPN dates are US Eastern; pad by a day on each side so every game
+      // that falls on one of the viewer's local days is included.
+      const from = new Date(); from.setDate(from.getDate() - 1);
+      const to = new Date(); to.setDate(to.getDate() + UPCOMING_DAYS);
+      const range = `${toISO(from).replaceAll("-", "")}-${toISO(to).replaceAll("-", "")}`;
+      try {
+        const res = await fetch(`${API}${range}&limit=200`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        renderUpcoming(data.events || []);
+      } catch (err) {
+        upStatusEl.textContent = `Couldn't load upcoming games (${err.message}). Try again later.`;
       }
     }
 
@@ -245,12 +337,14 @@
         dateInput.max = toISO(new Date());
         load();
       }
+      if (now !== shownYesterday) loadUpcoming();
       shownYesterday = now;
     });
 
     dateInput.value = yesterday();
     dateInput.max = toISO(new Date());
     load();
+    loadUpcoming();
   </script>
 </body>
 </html>
