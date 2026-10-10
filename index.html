@@ -2,7 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="NHL Yesterday">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#111418" media="(prefers-color-scheme: dark)">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="icon" type="image/png" href="apple-touch-icon.png">
+  <link rel="manifest" href="manifest.webmanifest">
   <title>NHL Yesterday</title>
   <style>
     :root {
@@ -30,20 +39,31 @@
       color: var(--text);
       font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       line-height: 1.4;
+      -webkit-text-size-adjust: 100%;
     }
-    main { max-width: 640px; margin: 0 auto; padding: 32px 16px 48px; }
+    main {
+      max-width: 640px;
+      margin: 0 auto;
+      padding: calc(24px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right))
+               calc(48px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
+    }
     h1 { font-size: 1.6rem; margin: 0 0 4px; }
     .sub { color: var(--muted); margin: 0 0 20px; }
-    .controls { display: flex; gap: 8px; align-items: center; margin-bottom: 20px; }
+    .controls { display: flex; gap: 8px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; }
     .controls button, .controls input {
       font: inherit;
+      font-size: 16px; /* 16px+ stops iOS Safari zooming in on focus */
+      min-height: 44px; /* Apple's minimum touch target */
+      -webkit-appearance: none;
+      appearance: none;
       color: var(--text);
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 6px 10px;
     }
-    .controls button { cursor: pointer; }
+    .controls button { cursor: pointer; min-width: 44px; touch-action: manipulation; }
+    .controls input { flex: 1; min-width: 0; }
     .controls button:hover { border-color: var(--accent); }
     ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
     li {
@@ -133,6 +153,8 @@
       img.src = t.logo || "";
       img.alt = "";
       img.loading = "lazy";
+      img.onerror = () => { img.style.visibility = "hidden"; };
+      if (!t.logo) img.style.visibility = "hidden";
 
       const full = document.createElement("span");
       full.className = "full";
@@ -211,6 +233,20 @@
       load();
     });
     dateInput.addEventListener("change", load);
+
+    // A home-screen app can stay suspended for days; when it comes back,
+    // jump to the new "yesterday" if the user hadn't picked another date.
+    let shownYesterday = yesterday();
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") return;
+      const now = yesterday();
+      if (now !== shownYesterday && dateInput.value === shownYesterday) {
+        dateInput.value = now;
+        dateInput.max = toISO(new Date());
+        load();
+      }
+      shownYesterday = now;
+    });
 
     dateInput.value = yesterday();
     dateInput.max = toISO(new Date());

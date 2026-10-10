@@ -1,0 +1,9 @@
+{
+  "name": "NHL Yesterday",
+  "short_name": "NHL Yesterday",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f4f5f7",
+  "theme_color": "#0b5cad",
+  "icons": [{ "src": "apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }]
+}
