@@ -4,12 +4,13 @@ A spoiler-free NHL tracker: open `index.html` in a browser to see which games
 were played the day before. Only matchups (teams and venue) are shown, never
 scores or results.
 
-- Defaults to yesterday (in your local time zone); use the arrows or date
-  picker to browse other days.
+- All dates and times follow North American Eastern Time (ET), the way the
+  NHL schedules games, wherever you are. "Yesterday" is yesterday in ET, so
+  a late game is never listed on two days.
+- Defaults to yesterday; use the arrows or date picker to browse other days.
 - Only finished games are listed; postponed or cancelled games are skipped.
-- A "Coming up" section lists the next 7 days of games with start times in
-  your local time zone. Today's games show only their start time, even once
-  they've been played.
+- A "Coming up" section lists the next 7 days of games with ET start times.
+  Today's games show only their start time, even once they've been played.
 - Data comes from ESPN's public NHL scoreboard endpoint. Score and result
   fields are never read.
 

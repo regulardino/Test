@@ -138,23 +138,30 @@
     const upEl = document.getElementById("upcoming");
     const UPCOMING_DAYS = 7;
 
-    function toISO(d) {
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, "0");
-      const day = String(d.getDate()).padStart(2, "0");
-      return `${y}-${m}-${day}`;
+    // All dates follow North American Eastern Time, the time zone the NHL
+    // and ESPN schedule games in. Using the viewer's own clock (e.g. in
+    // Europe) would put late games on two different days.
+    const NHL_TZ = "America/New_York";
+
+    // Today's date in Eastern Time as "YYYY-MM-DD".
+    function nhlToday() {
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone: NHL_TZ, year: "numeric", month: "2-digit", day: "2-digit"
+      }).format(new Date());
+    }
+
+    // Shift a "YYYY-MM-DD" date by whole days (pure calendar arithmetic).
+    function addDays(iso, days) {
+      const [y, m, d] = iso.split("-").map(Number);
+      return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
     }
 
     function yesterday() {
-      const d = new Date();
-      d.setDate(d.getDate() - 1);
-      return toISO(d);
+      return addDays(nhlToday(), -1);
     }
 
     function shiftDate(days) {
-      const [y, m, d] = dateInput.value.split("-").map(Number);
-      const dt = new Date(y, m - 1, d + days);
-      dateInput.value = toISO(dt);
+      dateInput.value = addDays(dateInput.value, days);
       load();
     }
 
@@ -191,9 +198,10 @@
         const type = e.status && e.status.type;
         return type && type.state === "post" && type.completed;
       });
+      played.sort((a, b) => new Date(a.date) - new Date(b.date));
 
-      const label = new Date(dateInput.value + "T12:00:00").toLocaleDateString(undefined, {
-        weekday: "long", month: "long", day: "numeric", year: "numeric"
+      const label = new Date(dateInput.value + "T12:00:00Z").toLocaleDateString(undefined, {
+        timeZone: "UTC", weekday: "long", month: "long", day: "numeric", year: "numeric"
       });
 
       if (played.length === 0) {
@@ -233,50 +241,44 @@
       return li;
     }
 
-    function dayLabel(d) {
-      return d.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+    function dayLabel(iso) {
+      return new Date(iso + "T12:00:00Z").toLocaleDateString(undefined, {
+        timeZone: "UTC", weekday: "long", month: "long", day: "numeric"
+      });
     }
 
-    // Games from today through the next UPCOMING_DAYS days, grouped by the
-    // viewer's local day, showing only the start time. Games that are live
-    // or already over today are still listed by start time only, so no
-    // result ever shows.
-    function renderUpcoming(events) {
+    function startTime(e) {
+      return new Date(e.date).toLocaleTimeString("en-US", {
+        timeZone: NHL_TZ, hour: "numeric", minute: "2-digit"
+      }) + " ET";
+    }
+
+    // `days` is a list of [date, events] pairs, one per ESPN schedule day.
+    // Each game is shown under the day ESPN lists it on, with its Eastern
+    // start time only. Games that are live or already over today are still
+    // listed by start time only, so no result ever shows.
+    function renderUpcoming(days) {
       upEl.innerHTML = "";
-      const today = toISO(new Date());
-      const last = new Date();
-      last.setDate(last.getDate() + UPCOMING_DAYS - 1);
-      const lastISO = toISO(last);
+      const today = nhlToday();
+      const withGames = days.filter(([, events]) => events.length);
 
-      const groups = new Map();
-      const sorted = events
-        .filter(e => e.date)
-        .sort((a, b) => new Date(a.date) - new Date(b.date));
-      for (const e of sorted) {
-        const start = new Date(e.date);
-        const key = toISO(start);
-        if (key < today || key > lastISO) continue;
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(e);
-      }
-
-      if (groups.size === 0) {
+      if (withGames.length === 0) {
         upStatusEl.textContent = `No NHL games scheduled in the next ${UPCOMING_DAYS} days.`;
         return;
       }
       upStatusEl.textContent = "";
       upStatusEl.hidden = true;
 
-      for (const [key, games] of groups) {
+      for (const [day, events] of withGames) {
         const h = document.createElement("h3");
-        const [y, m, d] = key.split("-").map(Number);
-        h.textContent = key === today ? `Today, ${dayLabel(new Date(y, m - 1, d))}` : dayLabel(new Date(y, m - 1, d));
+        h.textContent = day === today ? `Today, ${dayLabel(day)}` : dayLabel(day);
         const ul = document.createElement("ul");
-        for (const e of games) {
+        const sorted = [...events].sort((a, b) => new Date(a.date) - new Date(b.date));
+        for (const e of sorted) {
           const type = (e.status && e.status.type) || {};
           const note = type.name === "STATUS_POSTPONED" ? "Postponed"
             : type.name === "STATUS_CANCELED" ? "Cancelled"
-            : new Date(e.date).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+            : e.date ? startTime(e) : "";
           const li = gameEl(e, note);
           if (li) ul.append(li);
         }
@@ -288,18 +290,14 @@
       upStatusEl.hidden = false;
       upStatusEl.textContent = "Loading…";
       upEl.innerHTML = "";
-      // Fetch one day per request with the same single-date query used for
-      // yesterday's games: ESPN rejects date ranges with HTTP 400. ESPN
-      // dates are US Eastern, so pad by a day on each side to cover every
-      // game that falls on one of the viewer's local days.
+      // One request per day with the single-date query used for yesterday's
+      // games (ESPN rejects date ranges with HTTP 400).
+      const today = nhlToday();
       const days = [];
-      for (let i = -1; i <= UPCOMING_DAYS; i++) {
-        const d = new Date();
-        d.setDate(d.getDate() + i);
-        days.push(toISO(d).replaceAll("-", ""));
-      }
+      for (let i = 0; i < UPCOMING_DAYS; i++) days.push(addDays(today, i));
+
       const results = await Promise.allSettled(days.map(async day => {
-        const res = await fetch(API + day);
+        const res = await fetch(API + day.replaceAll("-", ""));
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return (await res.json()).events || [];
       }));
@@ -309,13 +307,8 @@
         upStatusEl.textContent = `Couldn't load upcoming games (${failed[0].reason.message}). Try again later.`;
         return;
       }
-      // The padding days overlap neighbouring requests; de-duplicate by id.
-      const seen = new Set();
-      const events = results
-        .filter(r => r.status === "fulfilled")
-        .flatMap(r => r.value)
-        .filter(e => !e.id || (!seen.has(e.id) && seen.add(e.id)));
-      renderUpcoming(events);
+      renderUpcoming(days.map((day, i) =>
+        [day, results[i].status === "fulfilled" ? results[i].value : []]));
       if (failed.length) {
         upStatusEl.hidden = false;
         upStatusEl.textContent = "Some days couldn't be loaded; the list may be incomplete.";
@@ -353,7 +346,7 @@
       const now = yesterday();
       if (now !== shownYesterday && dateInput.value === shownYesterday) {
         dateInput.value = now;
-        dateInput.max = toISO(new Date());
+        dateInput.max = nhlToday();
         load();
       }
       if (now !== shownYesterday) loadUpcoming();
@@ -361,7 +354,7 @@
     });
 
     dateInput.value = yesterday();
-    dateInput.max = toISO(new Date());
+    dateInput.max = nhlToday();
     load();
     loadUpcoming();
   </script>
