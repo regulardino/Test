@@ -288,18 +288,37 @@
       upStatusEl.hidden = false;
       upStatusEl.textContent = "Loading…";
       upEl.innerHTML = "";
-      // ESPN dates are US Eastern; pad by a day on each side so every game
-      // that falls on one of the viewer's local days is included.
-      const from = new Date(); from.setDate(from.getDate() - 1);
-      const to = new Date(); to.setDate(to.getDate() + UPCOMING_DAYS);
-      const range = `${toISO(from).replaceAll("-", "")}-${toISO(to).replaceAll("-", "")}`;
-      try {
-        const res = await fetch(`${API}${range}&limit=200`);
+      // Fetch one day per request with the same single-date query used for
+      // yesterday's games: ESPN rejects date ranges with HTTP 400. ESPN
+      // dates are US Eastern, so pad by a day on each side to cover every
+      // game that falls on one of the viewer's local days.
+      const days = [];
+      for (let i = -1; i <= UPCOMING_DAYS; i++) {
+        const d = new Date();
+        d.setDate(d.getDate() + i);
+        days.push(toISO(d).replaceAll("-", ""));
+      }
+      const results = await Promise.allSettled(days.map(async day => {
+        const res = await fetch(API + day);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        renderUpcoming(data.events || []);
-      } catch (err) {
-        upStatusEl.textContent = `Couldn't load upcoming games (${err.message}). Try again later.`;
+        return (await res.json()).events || [];
+      }));
+
+      const failed = results.filter(r => r.status === "rejected");
+      if (failed.length === results.length) {
+        upStatusEl.textContent = `Couldn't load upcoming games (${failed[0].reason.message}). Try again later.`;
+        return;
+      }
+      // The padding days overlap neighbouring requests; de-duplicate by id.
+      const seen = new Set();
+      const events = results
+        .filter(r => r.status === "fulfilled")
+        .flatMap(r => r.value)
+        .filter(e => !e.id || (!seen.has(e.id) && seen.add(e.id)));
+      renderUpcoming(events);
+      if (failed.length) {
+        upStatusEl.hidden = false;
+        upStatusEl.textContent = "Some days couldn't be loaded; the list may be incomplete.";
       }
     }
 
